@@ -9,7 +9,9 @@ import rosbag
 # =========================
 # USER SETTINGS (edit these)
 # =========================
-BAG_PATH = os.path.join("bag/arm_3", "calib_arm_3.bag")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BAG_ROOT_DIR = os.path.realpath(os.path.join(SCRIPT_DIR, "bag"))
+BAG_PATH = os.path.join(SCRIPT_DIR, "bag", "arm_3", "calib_arm_3.bag")
 ARM_INDEX = 3
 ROTOR_TOPIC = None  # Auto-detect if None (expects one /mocap/arm*/pose in bag)
 
@@ -22,7 +24,7 @@ SHOW_PLOTS = True
 INVERT_YZ = True
 UNWRAP_AZIMUTH = True
 ROTOR_Z_OFFSET = 6.499424548581256 / 1000
-OUTPUT_DIR = os.path.join("data", "lut")
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "lut")
 
 
 def calc_angles(joint_xyz, rotor_xyz):
@@ -57,10 +59,6 @@ def resolve_topic_name(bag, requested_topic):
     topics = set(bag.get_type_and_topic_info().topics.keys())
     if requested_topic in topics:
         return requested_topic
-
-    alt = requested_topic[1:] if requested_topic.startswith("/") else "/" + requested_topic
-    if alt in topics:
-        return alt
 
     available = ", ".join(sorted(topics))
     raise RuntimeError(
@@ -131,6 +129,18 @@ def read_mocap_data(bag, joint_topic, rotor_topic):
     return rotor_time, joint_xyz, rotor_xyz
 
 
+def assert_in_bag_scope(path):
+    real_path = os.path.realpath(path)
+    try:
+        common = os.path.commonpath([real_path, BAG_ROOT_DIR])
+    except ValueError:
+        common = ""
+    if common != BAG_ROOT_DIR:
+        raise RuntimeError(
+            f"Refusing bag outside 2-axis scope: {real_path}. Expected under {BAG_ROOT_DIR}"
+        )
+
+
 def build_output_path():
     bag_stem = os.path.splitext(os.path.basename(BAG_PATH))[0]
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -176,6 +186,10 @@ def main():
     print(f"BAG_PATH: {BAG_PATH}")
     print(f"ARM_INDEX (mag_mux): {ARM_INDEX}")
     print(f"ROTOR_TOPIC setting: {ROTOR_TOPIC}")
+
+    if not os.path.isfile(BAG_PATH):
+        raise FileNotFoundError(f"Bag file not found: {BAG_PATH}")
+    assert_in_bag_scope(BAG_PATH)
 
     bag = rosbag.Bag(BAG_PATH)
     try:

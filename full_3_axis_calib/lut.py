@@ -8,7 +8,8 @@ import pandas as pd
 # =========================
 # USER SETTINGS
 # =========================
-LUT_DIR = Path("data/lut_3axis")
+SCRIPT_DIR = Path(__file__).resolve().parent
+LUT_DIR = SCRIPT_DIR / "data" / "lut_3axis"
 SHOW_POINTS = False
 MIN_SEGMENT_LEN_AZ = 40
 MIN_SEGMENT_LEN_EL = 40
@@ -319,8 +320,11 @@ def main():
     for file in csv_files:
         df = pd.read_csv(file)
         missing = [c for c in REQUIRED_COLS if c not in df.columns]
-        if missing:
-            raise ValueError(f"{file.name} missing columns: {missing}")
+        unexpected = [c for c in df.columns if c not in REQUIRED_COLS]
+        if missing or unexpected:
+            raise ValueError(
+                f"{file.name} invalid columns. Missing: {missing}; Unexpected: {unexpected}"
+            )
 
         X = df[["mag_x", "mag_y", "mag_z"]].to_numpy()
         az_raw = df["azimuth"].to_numpy()

@@ -8,7 +8,8 @@ import pandas as pd
 # =========================
 # USER SETTINGS
 # =========================
-LUT_DIR = Path("data/lut")
+SCRIPT_DIR = Path(__file__).resolve().parent
+LUT_DIR = SCRIPT_DIR / "data" / "lut"
 SHOW_POINTS = False
 
 REQUIRED_COLS = ["mag_x", "mag_y", "mag_z", "azimuth", "elevation"]
@@ -66,8 +67,11 @@ def main():
     for ax, file in zip(axs, csv_files):
         df = pd.read_csv(file)
         missing = [c for c in REQUIRED_COLS if c not in df.columns]
-        if missing:
-            raise ValueError(f"{file.name} missing columns: {missing}")
+        unexpected = [c for c in df.columns if c not in REQUIRED_COLS]
+        if missing or unexpected:
+            raise ValueError(
+                f"{file.name} invalid columns. Missing: {missing}; Unexpected: {unexpected}"
+            )
 
         A_az = df[["mag_x", "mag_z"]].to_numpy()
         A_el = df[["mag_y", "mag_z"]].to_numpy()

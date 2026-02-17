@@ -19,9 +19,10 @@ import rosbag
 # =========================
 # USER SETTINGS (edit these)
 # =========================
-BAG_PATH = "bag"
-BAG_PATTERN = "*calib_arm_*.bag"
-SEARCH_RECURSIVE = True
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BAG_ROOT_DIR = os.path.realpath(os.path.join(SCRIPT_DIR, "full_3_axis_bags"))
+BAG_PATH = BAG_ROOT_DIR
+BAG_PATTERN = "full_3_axis_calib_*.bag"
 ARM_INDEX = None  # None => infer from file name calib_arm_<idx>.bag
 ROTOR_TOPIC = None  # Auto-detect if None (expects one /mocap/arm*/pose in bag)
 
@@ -37,7 +38,7 @@ UNWRAP_AZIMUTH = True
 # confusing during Hall-sensor calibration diagnostics.
 UNWRAP_TWIST = False
 ROTOR_Z_OFFSET = 6.499424548581256 / 1000
-OUTPUT_DIR = os.path.join("data", "lut_3axis")
+OUTPUT_DIR = os.path.join(SCRIPT_DIR, "data", "lut_3axis")
 TWIST_CONDITION_WARN_MIN_NORM = 0.02
 TWIST_REFERENCE_WINDOW_S = 2.0
 TWIST_RECALIB_LOW_CONDITION_PCT = 0.5
@@ -68,7 +69,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description=(
             "Build 3-axis LUT CSV from ROS bags. "
-            "Input can be one .bag file or a directory with calib_arm_*.bag."
+            "Input can be one .bag file or a directory with full_3_axis_calib_*.bag."
         )
     )
     parser.add_argument(
@@ -86,11 +87,6 @@ def parse_args():
         help="Glob pattern used when bag_input is a directory.",
     )
     parser.add_argument(
-        "--no-recursive",
-        action="store_true",
-        help="Disable recursive directory search.",
-    )
-    parser.add_argument(
         "--arm-index",
         type=int,
         default=None,
@@ -102,17 +98,18 @@ def parse_args():
     return parser.parse_args()
 
 
-def collect_bag_paths(bag_input, bag_pattern, recursive):
-    bag_input = os.path.expanduser(bag_input)
+def collect_bag_paths(bag_input, bag_pattern):
+    bag_input = os.path.abspath(os.path.expanduser(bag_input))
+    assert_in_bag_scope(bag_input)
     if os.path.isfile(bag_input):
         return [bag_input]
     if os.path.isdir(bag_input):
-        if recursive:
-            pattern = os.path.join(bag_input, "**", bag_pattern)
-        else:
-            pattern = os.path.join(bag_input, bag_pattern)
-        bag_paths = sorted(glob.glob(pattern, recursive=recursive))
-        return [p for p in bag_paths if os.path.isfile(p)]
+        pattern = os.path.join(bag_input, bag_pattern)
+        bag_paths = sorted(glob.glob(pattern))
+        files = [p for p in bag_paths if os.path.isfile(p)]
+        for path in files:
+            assert_in_bag_scope(path)
+        return files
     raise FileNotFoundError(f"Input not found: {bag_input}")
 
 
@@ -125,6 +122,18 @@ def infer_arm_index_from_filename(bag_path):
             f"got: {name}. Set --arm-index explicitly."
         )
     return int(match.group(1))
+
+
+def assert_in_bag_scope(path):
+    real_path = os.path.realpath(path)
+    try:
+        common = os.path.commonpath([real_path, BAG_ROOT_DIR])
+    except ValueError:
+        common = ""
+    if common != BAG_ROOT_DIR:
+        raise RuntimeError(
+            f"Refusing bag outside 3-axis scope: {real_path}. Expected under {BAG_ROOT_DIR}"
+        )
 
 
 def unwrap_deg(angle_deg):
@@ -170,10 +179,6 @@ def resolve_topic_name(bag, requested_topic):
     topics = set(bag.get_type_and_topic_info().topics.keys())
     if requested_topic in topics:
         return requested_topic
-
-    alt = requested_topic[1:] if requested_topic.startswith("/") else "/" + requested_topic
-    if alt in topics:
-        return alt
 
     available = ", ".join(sorted(topics))
     raise RuntimeError(
@@ -718,16 +723,13 @@ def process_bag(bag_path, arm_index):
 
 def main():
     args = parse_args()
-    recursive = SEARCH_RECURSIVE and (not args.no_recursive)
-    bag_paths = collect_bag_paths(args.bag_input, args.bag_pattern, recursive)
+    bag_paths = collect_bag_paths(args.bag_input, args.bag_pattern)
     if not bag_paths:
         raise FileNotFoundError(
             f"No bag files matching '{args.bag_pattern}' found in {args.bag_input}"
         )
 
     print(f"Found {len(bag_paths)} bag file(s).")
-    processed_ok = 0
-    failures = []
     for path in bag_paths:
         if args.arm_index is not None:
             arm_index = args.arm_index
@@ -735,25 +737,9 @@ def main():
             arm_index = ARM_INDEX
         else:
             arm_index = infer_arm_index_from_filename(path)
-        try:
-            process_bag(path, arm_index)
-            processed_ok += 1
-        except Exception as exc:
-            failures.append((path, exc))
-            print(f"[WARN] Skipping {path}: {exc}")
+        process_bag(path, arm_index)
 
-    if failures:
-        print(
-            f"\nCompleted with errors: {processed_ok} succeeded, "
-            f"{len(failures)} failed."
-        )
-        for path, exc in failures:
-            print(f" - {path}: {exc}")
-    else:
-        print(f"\nCompleted successfully: {processed_ok} bag(s) processed.")
-
-    if processed_ok == 0:
-        raise RuntimeError("All bag files failed to process.")
+    print(f"\nCompleted successfully: {len(bag_paths)} bag(s) processed.")
 
 
 if __name__ == "__main__":

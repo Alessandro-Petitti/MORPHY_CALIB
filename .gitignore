@@ -1,4 +1,5 @@
-full_3_axis_bags/*
-bag/*
+full_3_axis_calib/full_3_axis_bags/*
+2_axis_calib/bag/*
 .venv/*
-__pycache__/*
+full_3_axis_calib/__pycache__/*
+2_axis_calib/__pycache__/*
