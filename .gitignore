@@ -1,0 +1,4 @@
+full_3_axis_bags/*
+bag/*
+.venv/*
+__pycache__/*
