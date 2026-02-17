@@ -21,6 +21,7 @@ DOMINANCE_RATIO_MIN_AZ = 1.35
 DOMINANCE_RATIO_MIN_EL = 1.35
 DOMINANCE_RATIO_MIN_TW = 1.10
 SPEED_SMOOTH_WINDOW = 21
+USE_POLY2 = True              # use poly2 features for az/el too
 TWIST_TARGET_MODE = "wrapped"  # "wrapped" or "unwrapped"
 PROTOCOL_PHASE_MODE = "auto"  # "off", "auto", "force"
 PROTOCOL_ACTIVE_PCTILE = 55.0
@@ -351,14 +352,50 @@ def main():
         fallback_el = False
         idx_tw, fallback_tw = index_or_full(mask_tw, MIN_SEGMENT_LEN_TW)
 
-        az_pred_wrapped, bsin_az, bcos_az = fit_circular(X[idx_az], azimuth[idx_az], X)
-        az_pred = unwrap_deg(az_pred_wrapped)
-        az_pred += np.median(azimuth - az_pred)
-        r2_az = r2_score(azimuth, az_pred)
+        # --- Azimuth fit: try linear and poly2, keep best ---
+        az_pred_wrapped_lin, bsin_az_lin, bcos_az_lin = fit_circular(
+            X[idx_az], azimuth[idx_az], X
+        )
+        az_pred_lin = unwrap_deg(az_pred_wrapped_lin)
+        az_pred_lin += np.median(azimuth - az_pred_lin)
+        r2_az_lin = r2_score(azimuth, az_pred_lin)
 
-        bel = fit_linear(X[idx_el], elevation[idx_el])
-        el_pred = predict_linear(X, bel)
-        r2_el = r2_score(elevation, el_pred)
+        if USE_POLY2:
+            X2 = poly2_features(X)
+            az_pred_wrapped_p2, bsin_az_p2, bcos_az_p2 = fit_circular(
+                X2[idx_az], azimuth[idx_az], X2
+            )
+            az_pred_p2 = unwrap_deg(az_pred_wrapped_p2)
+            az_pred_p2 += np.median(azimuth - az_pred_p2)
+            r2_az_p2 = r2_score(azimuth, az_pred_p2)
+        else:
+            r2_az_p2 = -np.inf
+
+        if r2_az_p2 > r2_az_lin:
+            az_pred, r2_az, bsin_az, bcos_az = az_pred_p2, r2_az_p2, bsin_az_p2, bcos_az_p2
+            az_model_name = "poly2"
+        else:
+            az_pred, r2_az, bsin_az, bcos_az = az_pred_lin, r2_az_lin, bsin_az_lin, bcos_az_lin
+            az_model_name = "linear"
+
+        # --- Elevation fit: try linear and poly2, keep best ---
+        bel_lin = fit_linear(X[idx_el], elevation[idx_el])
+        el_pred_lin = predict_linear(X, bel_lin)
+        r2_el_lin = r2_score(elevation, el_pred_lin)
+
+        if USE_POLY2:
+            bel_p2 = fit_linear(X2[idx_el], elevation[idx_el])
+            el_pred_p2 = predict_linear(X2, bel_p2)
+            r2_el_p2 = r2_score(elevation, el_pred_p2)
+        else:
+            r2_el_p2 = -np.inf
+
+        if r2_el_p2 > r2_el_lin:
+            el_pred, r2_el, bel = el_pred_p2, r2_el_p2, bel_p2
+            el_model_name = "poly2"
+        else:
+            el_pred, r2_el, bel = el_pred_lin, r2_el_lin, bel_lin
+            el_model_name = "linear"
 
         # Twist fit: uses only mag as input (no cascaded az/el predictions)
         # so the model is deployable as a simple f(mag_x, mag_y, mag_z) → twist.
@@ -371,35 +408,19 @@ def main():
         tw_wraps = int(np.sum(np.abs(np.diff(tw_raw)) > 180.0))
 
         print(f"\n{file.name}")
-        print(
-            "  Segment samples: "
-            f"az={int(mask_az.sum())}, el={int(mask_el.sum())}, tw={int(mask_tw.sum())}"
-        )
-        print(
-            "  Segment thresholds [deg/sample]: "
-            f"az={thresholds[0]:.4f}, el={thresholds[1]:.4f}, tw={thresholds[2]:.4f}"
-        )
-        print(f"  Twist target mode: {TWIST_TARGET_MODE}")
-        print(f"  Twist score metric: {tw_model['metric']}")
-        print(f"  Fallback full-data: az={fallback_az}, el={fallback_el}, tw={fallback_tw}")
-        print(f"  Wrap jumps raw: az={az_wraps}, tw={tw_wraps}")
-        print(f"  R^2 azimuth   : {r2_az:.4f}")
-        print(f"  R^2 elevation : {r2_el:.4f}")
-        print(f"  R^2 twist     : {r2_tw:.4f}")
+        print(f"  R^2 azimuth   : {r2_az:.4f}  (model={az_model_name})")
+        print(f"  R^2 elevation : {r2_el:.4f}  (model={el_model_name})")
+        print(f"  R^2 twist     : {r2_tw:.4f}  (model={tw_model['best']})")
         print(f"  Az sin params : {tuple(bsin_az)}")
         print(f"  Az cos params : {tuple(bcos_az)}")
         print(f"  El params     : {tuple(bel)}")
-        print(
-            "  Twist model candidates R^2: "
-            f"circular={tw_model['r2_circ']:.4f}, "
-            f"linear={tw_model['r2_lin']:.4f}, "
-            f"poly2={tw_model['r2_poly2']:.4f}"
-        )
-        print(f"  Twist model selected: {tw_model['best']}")
-        print(f"  Tw sin params : {tuple(tw_model['circ_sin'])}")
-        print(f"  Tw cos params : {tuple(tw_model['circ_cos'])}")
-        print(f"  Tw linear params : {tuple(tw_model['linear'])}")
-        print(f"  Tw poly2 params : {tuple(tw_model['poly2'])}")
+        if tw_model["best"] == "circular":
+            print(f"  Tw sin params : {tuple(tw_model['circ_sin'])}")
+            print(f"  Tw cos params : {tuple(tw_model['circ_cos'])}")
+        elif tw_model["best"] == "linear":
+            print(f"  Tw linear params : {tuple(tw_model['linear'])}")
+        elif tw_model["best"] == "poly2":
+            print(f"  Tw poly2 params : {tuple(tw_model['poly2'])}")
 
         fig, axs = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(14, 9))
         x_idx = np.arange(len(df))
